@@ -1,0 +1,30 @@
+[project]
+name = "f1-strategy-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Viren Dhanwani", email = "virenpdhanwani@gmail.com" }
+]
+requires-python = ">=3.12, <3.13"
+dependencies = [
+    "fastf1>=3.8",
+    "fastmcp>=3.4.7",
+    "pandas>=2.3.3",
+    "pyarrow>=25.0.1",
+]
+
+[project.scripts]
+f1-strategy-agent = "f1_strategy_agent:main"
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
