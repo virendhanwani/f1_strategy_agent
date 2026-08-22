@@ -26,18 +26,23 @@ def setup_cache() -> None:
 def fetch_and_save(year: int, race: str, session_type: str) -> None:
     print(f"Loading {year} {race} ({session_type})...")
     session = fastf1.get_session(year, race, session_type)
-    session.load()  # pulls laps, telemetry, weather, results — this is the slow part
+    session.load()
 
     laps = session.laps
     results = session.results
     weather = session.weather_data
+    track_status = session.track_status_data
+    race_control = session.race_control_messages
 
     slug = f"{year}_{race.replace(' ', '_')}_{session_type}"
     laps.to_parquet(PROCESSED_DIR / f"{slug}_laps.parquet")
     results.to_parquet(PROCESSED_DIR / f"{slug}_results.parquet")
     weather.to_parquet(PROCESSED_DIR / f"{slug}_weather.parquet")
+    track_status.to_parquet(PROCESSED_DIR / f"{slug}_track_status.parquet")
+    race_control.to_parquet(PROCESSED_DIR / f"{slug}_race_control.parquet")
 
-    print(f"  -> saved {len(laps)} laps, {len(results)} results, {len(weather)} weather rows")
+    print(f"  -> saved {len(laps)} laps, {len(results)} results, "
+          f"{len(track_status)} track status changes, {len(race_control)} race control messages")
 
 def main() -> None:
     setup_cache()
