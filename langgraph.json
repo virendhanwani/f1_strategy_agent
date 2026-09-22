@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "agents.orchestrator:app"
+  },
+  "env": ".env"
+}
