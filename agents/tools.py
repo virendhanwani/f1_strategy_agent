@@ -70,13 +70,15 @@ async def get_race_schedule(season: str) -> dict:
 # ---- Strategy analysis on MCP data — no FastF1 needed -------
 
 @tool
-async def analyze_pit_strategy(season: str, round: str) -> dict:
-    """Detect undercut/overcut strategy swaps
+async def analyze_pit_strategy(season: str, round: str, max_stop_gap: int = 5) -> dict:
+    """Detect possible undercut/overcut gains after both drivers have pitted.
+    max_stop_gap: Maximum laps between the two stops; defaults to 5.
+    Unmatched stops are unclassified; position changes do not prove causation.
     FAST — built from lap times + pit stops only, no telemetry load.
     Try this BEFORE tire telemetry for any "why" question about a
     strategy decision or position change around a pit stop.
     """
-    return await analyze_race_strategy(season, round)
+    return await analyze_race_strategy(season, round, max_stop_gap=max_stop_gap)
 
 
 # ---- FastF1 — SLOW, only when Tier 1 truly can't answer -------
@@ -111,11 +113,14 @@ async def get_speed_trace(year: int, race: str, driver: str, lap_number: int) ->
 # ---- Regulations RAG --------------------------------------------------
 
 @tool
-async def ask_about_regulations(question: str) -> dict:
-    """Answer a question about official F1 sporting/technical regulations
-    (pit stop rules, parc fermé, penalties, etc.).
+async def ask_about_regulations(question: str, year: int = 2026) -> dict:
+    """Answer rules questions using the available 2026 FIA regulations only.
+    Pass the year relevant to the user's question or race, including follow-ups.
+    Resolve relative years using today's date. Other years return a limitation;
+    never substitute 2026 rules for a historical race. For a general question
+    without a year, default to 2026 and explicitly identify that scope.
     """
-    return await answer_regulation_question(question)
+    return await answer_regulation_question(question, year=year)
 
 ALL_TOOLS = [
     get_race_results,

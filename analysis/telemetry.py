@@ -57,7 +57,8 @@ def degradation_rate(laps: pd.DataFrame, driver: str, stint: int) -> float | Non
     remain after filtering to fit a meaningful trend.
     """
     d = tire_degradation(laps, driver, stint=stint)
-    if len(d) < 3:
+    d = d.replace([np.inf, -np.inf], np.nan).dropna(subset=["TyreLife", "LapTimeSeconds"])
+    if len(d) < 3 or d["TyreLife"].nunique() < 2:
         return None
     slope = np.polyfit(d["TyreLife"], d["LapTimeSeconds"], 1)[0]
     return round(float(slope), 3)
@@ -70,7 +71,7 @@ def compare_drivers_pace(laps: pd.DataFrame, drivers: list[str]) -> pd.DataFrame
         d = tire_degradation(laps, drv)
         if not d.empty:
             rows.append({"driver": drv, "median_lap_time": d["LapTimeSeconds"].median(), "clean_laps": len(d)})
-    return pd.DataFrame(rows).sort_values("median_lap_time")
+    return pd.DataFrame(rows, columns=["driver", "median_lap_time", "clean_laps"]).sort_values("median_lap_time")
 
 
 def speed_trace(year: int, race: str, driver: str, lap_number: int, session_type: str = "R") -> pd.DataFrame:
@@ -87,5 +88,7 @@ def speed_trace(year: int, race: str, driver: str, lap_number: int, session_type
     session = fastf1.get_session(year, race, session_type)
     session.load(laps=True, telemetry=True, weather=False)
     lap = session.laps.pick_driver(driver).pick_lap(lap_number)
+    if lap.empty:
+        return pd.DataFrame(columns=["Distance", "Speed", "Throttle", "Brake", "nGear"])
     car_data = lap.get_car_data().add_distance()
     return car_data[["Distance", "Speed", "Throttle", "Brake", "nGear"]]

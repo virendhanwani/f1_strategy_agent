@@ -26,88 +26,110 @@ def build_position_timeline(laps_data: dict) -> pd.DataFrame:
         for lap in laps_data["laps"]
         for t in lap["timings"]
     ]
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["lap", "driver_id", "position", "time"])
 
 
 def build_pit_stops_df(pit_stops_data: dict) -> pd.DataFrame:
     """Flattens the get_pit_stops MCP tool's response into a flat DataFrame."""
-    return pd.DataFrame(pit_stops_data["pit_stops"])
+    return pd.DataFrame(pit_stops_data["pit_stops"], columns=["driver_id", "lap", "stop", "time", "duration"])
 
 
-def find_strategy_swaps(laps_df: pd.DataFrame, pits_df: pd.DataFrame, window: int = 3) -> pd.DataFrame:
+def find_strategy_swaps(
+    laps_df: pd.DataFrame, pits_df: pd.DataFrame, max_stop_gap: int = 5
+) -> pd.DataFrame:
+    """Find possible gains between neighboring drivers' paired pit stops.
+
+    The rival must stop 1..max_stop_gap laps after the first driver. Neither
+    can stop again before the comparison, made at the end of the lap after
+    the second stop (allowing for pit exits across the timing line). Missing
+    positions, same-lap stops, and unmatched stops are left unclassified.
     """
-    For each pit stop, looks at whoever was immediately ahead/behind on track
-    the lap before, then checks `window` laps later: did the order flip?
-
-    If it flipped and the rival hadn't pitted yet (or pitted later) -> undercut.
-    If it flipped and the rival had already pitted earlier -> overcut.
-    """
+    if max_stop_gap < 1:
+        raise ValueError("max_stop_gap must be at least 1")
     events = []
+    evaluated = 0
+    if laps_df.empty or pits_df.empty:
+        result = pd.DataFrame(events)
+        result.attrs["evaluated_sequences"] = evaluated
+        return result
 
-    for lap_num in pits_df["lap"].unique():
-        pitters_this_lap = pits_df[pits_df["lap"] == lap_num]["driver_id"].tolist()
-        print(f"Lap {lap_num}: {len(pitters_this_lap)} pitters: {pitters_this_lap}")
-        for driver in pitters_this_lap:
-            pos_row = laps_df[(laps_df.driver_id == driver) & (laps_df.lap == lap_num - 1)]
-            print(f" pos row {pos_row} driver {driver}")
-            if pos_row.empty:
+    stops = pits_df.sort_values("lap").drop_duplicates(["driver_id", "lap"])
+    for _, first in stops.iterrows():
+        early, first_lap = first.driver_id, int(first.lap)
+        before_lap = first_lap - 1
+        before = laps_df[laps_df.lap == before_lap]
+        early_before = before[before.driver_id == early]
+        if early_before.empty:
+            continue
+        early_position = int(early_before.iloc[0].position)
+        neighbors = before[before.position.isin([early_position - 1, early_position + 1])]
+
+        for _, neighbor in neighbors.iterrows():
+            late = neighbor.driver_id
+            rival_stops = stops[(stops.driver_id == late) & (stops.lap >= first_lap)]
+            if rival_stops.empty:
                 continue
-            pos_before = pos_row.iloc[0].position
+            second_lap = int(rival_stops.iloc[0].lap)
+            if not 1 <= second_lap - first_lap <= max_stop_gap:
+                continue
+            check_lap = second_lap + 1
+            # Do not combine two separate pit cycles or compare during another stop.
+            extra_early = stops[(stops.driver_id == early) & stops.lap.between(first_lap + 1, check_lap)]
+            extra_late = stops[(stops.driver_id == late) & stops.lap.between(second_lap + 1, check_lap)]
+            if not extra_early.empty or not extra_late.empty:
+                continue
 
-            # drivers running immediately ahead/behind before this pit stop
-            neighbors = laps_df[
-                (laps_df.lap == lap_num - 1) & (laps_df.position.isin([pos_before - 1, pos_before + 1]))
-            ]
-            print(f"  {driver} was P{pos_before} before pitting; neighbors: {neighbors['driver_id'].tolist()}")
-            for _, neighbor in neighbors.iterrows():
-                rival = neighbor.driver_id
-                if rival == driver:
-                    continue
+            after = laps_df[laps_df.lap == check_lap]
+            early_after = after[after.driver_id == early]
+            late_after = after[after.driver_id == late]
+            if early_after.empty or late_after.empty:
+                continue
+            evaluated += 1
+            late_position = int(neighbor.position)
+            early_final = int(early_after.iloc[0].position)
+            late_final = int(late_after.iloc[0].position)
 
-                rival_pits = pits_df[
-                    (pits_df.driver_id == rival) & (pits_df.lap.between(lap_num - window, lap_num + window))
-                ]
-                rival_pit_lap = rival_pits.iloc[0].lap if not rival_pits.empty else None
+            if early_position > late_position and early_final < late_final:
+                driver, rival, strategy = early, late, "undercut"
+                driver_stop, rival_stop = first_lap, second_lap
+                positions = early_position, late_position, early_final, late_final
+            elif early_position < late_position and early_final > late_final:
+                driver, rival, strategy = late, early, "overcut"
+                driver_stop, rival_stop = second_lap, first_lap
+                positions = late_position, early_position, late_final, early_final
+            else:
+                continue
 
-                check_lap = lap_num + window
-                driver_after = laps_df[(laps_df.driver_id == driver) & (laps_df.lap == check_lap)]
-                rival_after = laps_df[(laps_df.driver_id == rival) & (laps_df.lap == check_lap)]
-                if driver_after.empty or rival_after.empty:
-                    continue
+            events.append({
+                "lap": check_lap,
+                "driver": driver, "rival": rival, "strategy": strategy,
+                "classification": "possible",
+                "driver_pit_lap": driver_stop, "rival_pit_lap": rival_stop,
+                "comparison_before_lap": before_lap,
+                "position_before": positions[0], "rival_position_before": positions[1],
+                "position_after": positions[2], "rival_position_after": positions[3],
+            })
 
-                was_ahead = pos_before < neighbor.position
-                is_ahead_after = driver_after.iloc[0].position < rival_after.iloc[0].position
-
-                if was_ahead != is_ahead_after:
-                    strategy = "undercut" if (rival_pit_lap is None or lap_num < rival_pit_lap) else "overcut"
-                    events.append(
-                        {
-                            "lap": lap_num,
-                            "driver": driver,
-                            "rival": rival,
-                            "strategy": strategy,
-                            "position_before": pos_before,
-                            "rival_position_before": neighbor.position,
-                            "position_after": driver_after.iloc[0].position,
-                            "rival_position_after": rival_after.iloc[0].position,
-                        }
-                    )
-
-    return pd.DataFrame(events)
+    result = pd.DataFrame(events)
+    result.attrs["evaluated_sequences"] = evaluated
+    return result
 
 
 def summarize_swaps(events_df: pd.DataFrame) -> list[str]:
-    """Turns the raw events DataFrame into plain-English sentences —
-    this is what actually gets handed to the LLM/agent layer."""
+    """Describe possible gains, naming the gaining driver and the losing rival."""
     if events_df.empty:
-        return ["No clear undercut/overcut swaps detected in this race."]
+        if events_df.attrs.get("evaluated_sequences", 0) == 0:
+            return ["No comparable matched pit-stop sequences found within the configured window; unmatched stops remain unclassified."]
+        return ["No relative-order gains detected in the matched pit-stop sequences."]
 
-    lines = []
-    for _, e in events_df.iterrows():
-        verb = "undercut" if e.strategy == "undercut" else "overcut"
-        lines.append(
-            f"Lap {int(e.lap)}: {e.driver} {verb} {e.rival} — "
-            f"went from P{int(e.position_before)} to P{int(e.position_after)}, "
-            f"while {e.rival} went from P{int(e.rival_position_before)} to P{int(e.rival_position_after)}."
-        )
-    return lines
+    return [
+        f"Possible {e.strategy}: {e.driver} pitted on lap {int(e.driver_pit_lap)}, "
+        f"{e.rival} on lap {int(e.rival_pit_lap)}. "
+        f"Between laps {int(e.comparison_before_lap)} and {int(e.lap)}, "
+        f"{e.driver} moved from behind {e.rival} to ahead "
+        f"(P{int(e.position_before)} → P{int(e.position_after)}); "
+        f"{e.rival} lost the relative position "
+        f"(P{int(e.rival_position_before)} → P{int(e.rival_position_after)}). "
+        "Position data alone does not prove the cause."
+        for _, e in events_df.iterrows()
+    ]

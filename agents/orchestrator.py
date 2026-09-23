@@ -7,6 +7,7 @@ from __future__ import annotations
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from collections.abc import Sequence
+from functools import lru_cache
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from agents.state import AgentState
@@ -35,7 +36,14 @@ def build_system_prompt() -> str:
         lap-level telemetry — not for general strategy or results questions.
 
         REGULATIONS: use the regulations tool for rules questions (pit stop counts,
-        parc fermé, penalties).
+        parc fermé, penalties). The available corpus covers 2026 only. Pass the
+        question's relevant year to ask_about_regulations, including the race year
+        established in earlier turns. Resolve relative years against today's date.
+        Do not apply 2026 rules to historical races or assess historical decisions
+        using them. If that year's documents are unavailable, state the limitation
+        instead of substituting model memory. Label general rules answers as based
+        on 2026 regulations, preserve source/page citations, and do not claim that
+        the corpus proves what rules apply to another season.
 
         Start broad. Most questions ("what happened in race X", "who's leading the
         championship") are fully answerable from Tier 1 alone. Only escalate to
@@ -53,15 +61,17 @@ def build_system_prompt() -> str:
         results cover only the drivers with available clean laps.
         """
 
-_llm = get_llm()
-_llm_with_tools = _llm.bind_tools(ALL_TOOLS)
+@lru_cache(maxsize=1)
+def get_agent_llm():
+    """Bind tools only when the first question needs the model."""
+    return get_llm().bind_tools(ALL_TOOLS)
 
 
 def agent_node(state: AgentState) -> dict:
     messages = state["messages"]
     if not messages or not isinstance(messages[0], SystemMessage):
         messages = [SystemMessage(content=build_system_prompt())] + messages
-    response = _llm_with_tools.invoke(messages)
+    response = get_agent_llm().invoke(messages)
     return {"messages": [response]}
 
 
