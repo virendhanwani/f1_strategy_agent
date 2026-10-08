@@ -22,6 +22,7 @@ dependencies = [
     "pypdf>=6.16.1",
     "python-dotenv>=1.2.3",
     "sentence-transformers>=6.0.0",
+    "streamlit>=1.55,<2",
 ]
 
 [project.scripts]
