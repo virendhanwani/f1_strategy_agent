@@ -11,3 +11,6 @@ wheels/
 .DS_Store
 .env
 .streamlit/secrets.toml
+.deployment_data/
+.langgraph_api/
+data/chroma/

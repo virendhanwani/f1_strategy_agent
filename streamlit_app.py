@@ -17,6 +17,15 @@ except FileNotFoundError:
     pass
 load_dotenv(Path(__file__).parent / ".env")
 
+from deployment.assets import ensure_assets
+
+try:
+    with st.spinner("Loading race data and regulation index…"):
+        ensure_assets()
+except Exception:
+    st.error("Could not load deployment data. Check the R2 settings and bundle checksum in Streamlit Secrets, then restart the app.")
+    st.stop()
+
 
 def new_chat():
     st.session_state.history = []

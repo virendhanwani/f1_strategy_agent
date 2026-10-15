@@ -16,7 +16,10 @@ _clients = WeakKeyDictionary()
 def get_mcp_server_path() -> Path:
     """Resolve relative overrides against the project, never the launch directory."""
     configured = os.environ.get("MCP_SERVER_PATH", "").strip()
-    path = Path(configured or "../f1-mcp/src/server.py").expanduser()
+    default = "../f1-mcp/src/server.py"
+    if not (PROJECT_ROOT / default).is_file():
+        default = "deployment/mcp_server/server.py"
+    path = Path(configured or default).expanduser()
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     path = path.resolve()

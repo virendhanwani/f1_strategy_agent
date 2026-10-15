@@ -3,7 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-PROCESSED_DIR = Path(__file__).parent.parent / "data" / "processed"
+from deployment.assets import data_root
+
+PROCESSED_DIR = data_root() / "processed"
 
 
 def load_laps(year: int, race: str, session_type: str = "R") -> pd.DataFrame:

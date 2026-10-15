@@ -12,7 +12,9 @@ from threading import Lock
 from agents.llm import get_llm
 from agents.errors import handle_tool_errors, tool_error
 
-CHROMA_DIR = Path(__file__).parent.parent / "data" / "chroma"
+from deployment.assets import data_root
+
+CHROMA_DIR = data_root() / "chroma"
 COLLECTION_NAME = "fia_regulations"
 REGULATION_YEAR = 2026
 _collection_lock = Lock()
