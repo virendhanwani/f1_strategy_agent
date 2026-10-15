@@ -1,5 +1,6 @@
 """Restore a versioned private R2 bundle once per server process."""
 import hashlib
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ import zipfile
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _lock = Lock()
 _ready = False
+logger = logging.getLogger(__name__)
 
 
 def data_root():
@@ -47,6 +49,7 @@ def extract_bundle(archive, destination):
 def ensure_assets():
     global _ready
     if not os.getenv("R2_BUNDLE_KEY"):
+        logger.warning("R2 bundle not configured; using local data at %s", data_root())
         return
     with _lock:
         if _ready:
@@ -57,6 +60,8 @@ def ensure_assets():
         root = data_root()
         marker = root / ".sha256"
         if marker.is_file() and marker.read_text() == expected:
+            logger.warning("Using restored assets at %s; sqlite_exists=%s", root,
+                           (root / "chroma" / "chroma.sqlite3").is_file())
             _ready = True
             return
         with tempfile.TemporaryDirectory(dir=PROJECT_ROOT) as temporary:
@@ -74,3 +79,5 @@ def ensure_assets():
                 shutil.rmtree(root)
             staging.replace(root)
         _ready = True
+        logger.warning("R2 assets restored at %s; sqlite_exists=%s", root,
+                       (root / "chroma" / "chroma.sqlite3").is_file())

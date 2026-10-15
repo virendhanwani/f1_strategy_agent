@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from pathlib import Path
 from weakref import WeakKeyDictionary
@@ -11,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
 _clients = WeakKeyDictionary()
+logger = logging.getLogger(__name__)
 
 
 def get_mcp_server_path() -> Path:
@@ -23,6 +25,8 @@ def get_mcp_server_path() -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     path = path.resolve()
+    logger.warning("MCP server resolved: path=%s exists=%s project_root=%s",
+                   path, path.is_file(), PROJECT_ROOT)
     if not path.is_file():
         raise FileNotFoundError(f"MCP server file not found: {path}")
     return path
@@ -45,8 +49,9 @@ async def call_mcp_tool(tool_name: str, **kwargs) -> dict:
     try:
         client = get_mcp_client()
     except FileNotFoundError as error:
+        logger.exception("MCP server initialization failed")
         return tool_error("missing_mcp_server", str(error),
-                          "Set MCP_SERVER_PATH to the server.py file in your f1-mcp checkout.")
+                          "Check MCP_SERVER_PATH and that deployment/mcp_server/server.py is included in the deployed repository.")
     async with client:
         result = await client.call_tool(tool_name, kwargs)
         if not isinstance(result.data, dict):

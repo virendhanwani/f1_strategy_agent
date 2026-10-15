@@ -5,6 +5,7 @@ RAG tool answering questions about F1 sporting/technical regulations.
 from __future__ import annotations
 from pathlib import Path
 import asyncio
+import logging
 import re
 from functools import lru_cache
 from threading import Lock
@@ -18,6 +19,11 @@ CHROMA_DIR = data_root() / "chroma"
 COLLECTION_NAME = "fia_regulations"
 REGULATION_YEAR = 2026
 _collection_lock = Lock()
+logger = logging.getLogger(__name__)
+
+
+class MissingRegulationStore(FileNotFoundError):
+    """The index or named collection is absent, not an embedding dependency."""
 
 
 @lru_cache(maxsize=1)
@@ -27,15 +33,18 @@ def _load_collection(directory: Path):
     Failed initialization is not cached, so building the store and retrying
     works without restarting the agent.
     """
+    logger.warning("Opening regulation index: path=%s sqlite_exists=%s", directory,
+                   (directory / "chroma.sqlite3").is_file())
     if not (directory / "chroma.sqlite3").is_file():
-        raise FileNotFoundError("The regulation vector store has not been built.")
+        raise MissingRegulationStore("The regulation database file is missing.")
 
     import chromadb
     from chromadb.utils import embedding_functions
 
     client = chromadb.PersistentClient(path=str(directory))
     if COLLECTION_NAME not in {collection.name for collection in client.list_collections()}:
-        raise FileNotFoundError("The fia_regulations collection is missing.")
+        raise MissingRegulationStore("The fia_regulations collection is missing.")
+    logger.warning("Regulation collection found; loading embedding model")
     embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
     return client.get_collection(COLLECTION_NAME, embedding_function=embed_fn)
 
@@ -91,9 +100,10 @@ async def answer_regulation_question(question: str, year: int = REGULATION_YEAR)
         }
     try:
         chunks = await asyncio.to_thread(retrieve_regulation_chunks, question)
-    except FileNotFoundError as error:
+    except MissingRegulationStore as error:
+        logger.exception("Regulation store unavailable at %s", CHROMA_DIR)
         return tool_error("missing_regulations", str(error),
-                          "Run uv run python -m ingestion.build_vector_store, then retry.")
+                          "Check deployment asset restoration and the database path in server logs.")
     if not chunks:
         return tool_error("no_data", "No regulation excerpts were retrieved.",
                           "Check that the regulation collection has been populated.")
