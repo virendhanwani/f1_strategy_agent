@@ -1,9 +1,11 @@
 """Streamlit entry point: uv run streamlit run streamlit_app.py."""
 
-import asyncio
 import logging
 import os
 from pathlib import Path
+from queue import Empty
+
+from agents.chat_job import ChatJob
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -29,6 +31,9 @@ except Exception:
 
 
 def new_chat():
+    job = st.session_state.pop("chat_job", None)
+    if job is not None:
+        job.cancel()
     st.session_state.history = []
     st.session_state.transcript = []
 
@@ -42,14 +47,15 @@ def render_message(message):
             st.markdown(message["content"])
 
 
-async def run_turn(question, status):
-    # Import only when needed so the landing page stays lightweight.
-    from agents.orchestrator import stream_chat
-
+def run_turn(job, status):
+    # Only this render thread touches Streamlit. The job survives script reruns.
     rows = {}
     had_tool_error = False
-    result = None
-    async for event in stream_chat(question, st.session_state.history):
+    while not job.done.is_set() or not job.events.empty():
+        try:
+            event = job.events.get(timeout=0.2)
+        except Empty:
+            continue
         kind = event["type"]
         if kind == "tool_start":
             row = status.empty()
@@ -62,32 +68,25 @@ async def run_turn(question, status):
             label = event["tool"].replace("_", " ").capitalize()
             if kind == "tool_error":
                 had_tool_error = True
-                # The final answer explains limitations; don't expose raw tool errors.
                 row.warning(f"{label}: some data could not be retrieved.")
             else:
                 row.write(f"✓ {label}")
-        elif kind == "complete":
-            status.update(
-                label="Finished with data limitations" if had_tool_error else "Analysis complete",
-                state="complete", expanded=False,
-            )
-            result = event
-        elif kind == "error":
-            status.update(label="Could not finish this question", state="error")
-            result = event
-    # Drain the graph event stream before asyncio.run closes its event loop.
-    # Returning at the final event can cancel producer/cleanup tasks still running.
-    if result is not None:
-        return result
-    status.update(label="The response ended early", state="error")
-    return {"type": "error", "message": "The response ended before an answer was ready."}
+    result = job.result
+    status.update(
+        label=("Finished with data limitations" if had_tool_error else "Analysis complete")
+        if result["type"] == "complete" else "Could not finish this question",
+        state="complete" if result["type"] == "complete" else "error",
+        expanded=False,
+    )
+    return result
 
 
 if "history" not in st.session_state:
     new_chat()
 
 # A rerun can interrupt a turn after its question was saved but before a reply.
-if st.session_state.transcript and st.session_state.transcript[-1]["role"] == "user":
+if (st.session_state.transcript and st.session_state.transcript[-1]["role"] == "user"
+        and "chat_job" not in st.session_state):
     logging.getLogger(__name__).warning("Recovered an interrupted chat turn after a rerun")
     st.session_state.transcript.append({
         "role": "assistant", "failed": True,
@@ -123,14 +122,14 @@ if not st.session_state.transcript:
         "Compare Verstappen and Alonso's race pace at Monaco in 2023.",
         "What are the tyre compound requirements under the 2026 regulations?",
     ):
-        if st.button(prompt, disabled=not configured, use_container_width=True):
+        if st.button(prompt, disabled=not configured or "chat_job" in st.session_state, use_container_width=True):
             example = prompt
 
 for message in st.session_state.transcript:
     render_message(message)
 
 follow_up = None
-if st.session_state.history and not st.session_state.transcript[-1].get("failed"):
+if st.session_state.history and not st.session_state.transcript[-1].get("failed") and "chat_job" not in st.session_state:
     st.markdown("**Continue this conversation**")
     st.caption("Choose a follow-up or type your own below. Earlier messages stay above.")
     for prompt in (
@@ -138,34 +137,26 @@ if st.session_state.history and not st.session_state.transcript[-1].get("failed"
         "What data supports that explanation?",
         "What are the limitations of that analysis?",
     ):
-        if st.button(prompt, disabled=not configured, use_container_width=True):
+        if st.button(prompt, disabled=not configured or "chat_job" in st.session_state, use_container_width=True):
             follow_up = prompt
 
 question = st.chat_input(
     "Ask a follow-up about this conversation…" if st.session_state.history else "Ask about an F1 race…",
-    disabled=not configured,
+    disabled=not configured or "chat_job" in st.session_state,
 )
 question = (question or example or follow_up or "").strip()
 if question:
     user_message = {"role": "user", "content": question}
     st.session_state.transcript.append(user_message)
     render_message(user_message)
+    from agents.orchestrator import stream_chat
+    st.session_state.chat_job = ChatJob(stream_chat, question, st.session_state.history)
+
+if "chat_job" in st.session_state:
+    job = st.session_state.chat_job
     with st.chat_message("assistant"):
         with st.status("Analysing your question…", expanded=True) as status:
-            try:
-                result = asyncio.run(run_turn(question, status))
-            except asyncio.CancelledError:
-                logging.getLogger(__name__).exception("Chat request was cancelled")
-                status.update(label="Request interrupted", state="error")
-                result = {
-                    "type": "error",
-                    "message": "The request was interrupted before an answer was ready. Please send the question again.",
-                }
-            except Exception:
-                # Covers setup failures outside the graph's error handling.
-                logging.getLogger(__name__).exception("Chat request failed")
-                status.update(label="Could not finish this question", state="error")
-                result = {"type": "error", "message": "The request could not be completed. Please try again later."}
+            result = run_turn(job, status)
         if result["type"] == "complete":
             st.session_state.history = result["state"]["messages"]
             # BaseMessage.text supports both string and structured text content.
@@ -177,6 +168,7 @@ if question:
             st.error(reply["content"])
             st.caption("This turn was not added to the agent's memory. You can send the question again.")
         st.session_state.transcript.append(reply)
+        del st.session_state.chat_job
     # Rebuild the page from saved messages so history and follow-up controls
     # appear immediately after the first answer, without another user action.
     st.rerun()
