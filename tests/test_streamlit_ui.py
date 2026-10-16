@@ -40,6 +40,17 @@ def main():
     assert other.session_state.history == []
     assert other.session_state.transcript == []
 
+    # Simulate a script rerun after saving a question but before saving a reply.
+    app.session_state.transcript.append({"role": "user", "content": "Interrupted question"})
+    app.run()
+    assert not app.exception
+    assert app.session_state.transcript[-1]["failed"]
+    assert "interrupted" in app.error[0].value
+    assert len(app.session_state.history) == 2
+    count = len(app.session_state.transcript)
+    app.run()
+    assert len(app.session_state.transcript) == count
+
     next(button for button in app.button if button.label == "New chat").click().run()
     assert not app.exception
     assert app.session_state.history == []

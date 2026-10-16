@@ -1,6 +1,7 @@
 """Streamlit entry point: uv run streamlit run streamlit_app.py."""
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 
@@ -47,6 +48,7 @@ async def run_turn(question, status):
 
     rows = {}
     had_tool_error = False
+    result = None
     async for event in stream_chat(question, st.session_state.history):
         kind = event["type"]
         if kind == "tool_start":
@@ -69,16 +71,28 @@ async def run_turn(question, status):
                 label="Finished with data limitations" if had_tool_error else "Analysis complete",
                 state="complete", expanded=False,
             )
-            return event
+            result = event
         elif kind == "error":
             status.update(label="Could not finish this question", state="error")
-            return event
+            result = event
+    # Drain the graph event stream before asyncio.run closes its event loop.
+    # Returning at the final event can cancel producer/cleanup tasks still running.
+    if result is not None:
+        return result
     status.update(label="The response ended early", state="error")
     return {"type": "error", "message": "The response ended before an answer was ready."}
 
 
 if "history" not in st.session_state:
     new_chat()
+
+# A rerun can interrupt a turn after its question was saved but before a reply.
+if st.session_state.transcript and st.session_state.transcript[-1]["role"] == "user":
+    logging.getLogger(__name__).warning("Recovered an interrupted chat turn after a rerun")
+    st.session_state.transcript.append({
+        "role": "assistant", "failed": True,
+        "content": "The request was interrupted before an answer was ready. Please send the question again.",
+    })
 
 with st.sidebar:
     st.title("Race strategy, explained")
@@ -140,9 +154,15 @@ if question:
         with st.status("Analysing your question…", expanded=True) as status:
             try:
                 result = asyncio.run(run_turn(question, status))
+            except asyncio.CancelledError:
+                logging.getLogger(__name__).exception("Chat request was cancelled")
+                status.update(label="Request interrupted", state="error")
+                result = {
+                    "type": "error",
+                    "message": "The request was interrupted before an answer was ready. Please send the question again.",
+                }
             except Exception:
                 # Covers setup failures outside the graph's error handling.
-                import logging
                 logging.getLogger(__name__).exception("Chat request failed")
                 status.update(label="Could not finish this question", state="error")
                 result = {"type": "error", "message": "The request could not be completed. Please try again later."}
